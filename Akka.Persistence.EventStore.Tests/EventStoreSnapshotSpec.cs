@@ -1,20 +1,9 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-using Akka.Actor;
-using Akka.TestKit;
-using Akka.Persistence;
-using Akka.Persistence.Journal;
-using Xunit;
+﻿using Akka.Configuration;
 using Akka.Persistence.TestKit.Snapshot;
-using Akka.Configuration;
-
 
 namespace Akka.Persistence.EventStore.Tests
 {
-    public partial class EventStoreSnapshotSpec : SnapshotStoreSpec
+    public class EventStoreSnapshotSpec : SnapshotStoreSpec
     {
         private static readonly Config SpecConfig = ConfigurationFactory.ParseString(@"
             akka {

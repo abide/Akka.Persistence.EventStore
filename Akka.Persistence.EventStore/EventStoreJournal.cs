@@ -1,18 +1,17 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
-using System.Net;
 using System.Runtime.Serialization.Formatters;
 using System.Text;
 using System.Threading.Tasks;
 using Akka.Actor;
 using Akka.Event;
 using Akka.Persistence;
+using Akka.Persistence.EventStore;
 using Akka.Persistence.Journal;
 using EventStore.ClientAPI;
-using EventStore.ClientAPI.SystemData;
 using Newtonsoft.Json;
-using Akka.Persistence.EventStore;
 
 namespace EventStore.Persistence
 {
@@ -83,7 +82,13 @@ namespace EventStore.Persistence
             }
         }
 
-        public override async Task ReplayMessagesAsync(string persistenceId, long fromSequenceNr, long toSequenceNr, long max, Action<IPersistentRepresentation> replayCallback)
+        public override async Task ReplayMessagesAsync(
+            IActorContext context, 
+            string persistenceId, 
+            long fromSequenceNr, 
+            long toSequenceNr, 
+            long max,
+            Action<IPersistentRepresentation> recoveryCallback)
         {
             try
             {
@@ -111,7 +116,7 @@ namespace EventStore.Persistence
                     {
                         var json = Encoding.UTF8.GetString(@event.OriginalEvent.Data);
                         var representation = JsonConvert.DeserializeObject<IPersistentRepresentation>(json, _serializerSettings);
-                        replayCallback(representation);
+                        recoveryCallback(representation);
                         count++;
                         if (count == max) return;
                     }
@@ -127,42 +132,78 @@ namespace EventStore.Persistence
             }
         }
 
-        protected override async Task WriteMessagesAsync(IEnumerable<IPersistentRepresentation> messages)
+        protected override async Task<IImmutableList<Exception>> WriteMessagesAsync(IEnumerable<Akka.Persistence.AtomicWrite> messages)
         {
-            try
+            var atomicWriteTasks = messages.Select(atomicWrite =>
+                ((IImmutableList<IPersistentRepresentation>) atomicWrite.Payload)
+                    .GroupBy(representation => representation.PersistenceId)
+                    .Select(AppendToStreamAsync))
+                    .Select(AggregateTaskExceptions);
+
+            var atomicWriteExceptions = await CaptureTaskExceptions(atomicWriteTasks);
+            var list = atomicWriteExceptions.ToList();
+            return list.ToImmutableList();
+        }
+
+        private async Task<Exception> AggregateTaskExceptions(IEnumerable<Task> streamTasks)
+        {
+            var exceptions = await CaptureTaskExceptions(streamTasks);
+
+            var nonNullExceptions = exceptions.TakeWhile(x => x != null).ToList();
+            return nonNullExceptions.Count == 1
+                ? nonNullExceptions.Single()
+                : nonNullExceptions.Any() ? new AggregateException(nonNullExceptions) : null;
+        }
+
+        private async Task<IEnumerable<Exception>> CaptureTaskExceptions(IEnumerable<Task> streamTasks)
+        {
+            var exceptions = await Task<IEnumerable<Exception>>.Factory
+                .ContinueWhenAll(streamTasks.ToArray(),
+                    tasks => tasks.Select(t => t.IsFaulted ? TryUnwrapException(t.Exception) : null));
+            return exceptions;
+        }
+
+        private async Task AppendToStreamAsync(IGrouping<string, IPersistentRepresentation> representations)
+        {
+            var stream = representations.Key;
+            var events = representations.Select(x => TransformRepresentationIntoEventData(stream, x));
+            var connection = await GetConnection();
+            var expectedVersion = (int) representations.First().SequenceNr - 2;
+            expectedVersion = expectedVersion < 0 ? ExpectedVersion.NoStream : expectedVersion;
+            await connection.AppendToStreamAsync(stream, expectedVersion, events);
+            connection.Close();
+        }
+
+        private EventData TransformRepresentationIntoEventData(string stream, IPersistentRepresentation x)
+        {
+            var eventId = GuidUtility.Create(GuidUtility.IsoOidNamespace,
+                string.Concat(stream, x.SequenceNr));
+            var json = JsonConvert.SerializeObject(x, _serializerSettings);
+            var data = Encoding.UTF8.GetBytes(json);
+            var meta = new byte[0];
+            var payload = x.Payload;
+            if (payload.GetType().GetProperty("Metadata") != null)
             {
-                foreach (var grouping in messages.GroupBy(x => x.PersistenceId))
-                {
-                    var stream = grouping.Key;
-
-                    var representations = grouping.OrderBy(x => x.SequenceNr).ToArray();
-                    var expectedVersion = (int)representations.First().SequenceNr - 2;
-
-                    var events = representations.Select(x =>
-                    {
-                        var eventId = GuidUtility.Create(GuidUtility.IsoOidNamespace, string.Concat(stream, x.SequenceNr));
-                        var json = JsonConvert.SerializeObject(x, _serializerSettings);
-                        var data = Encoding.UTF8.GetBytes(json);
-                        var meta = new byte[0];
-                        var payload = x.Payload;
-                        if (payload.GetType().GetProperty("Metadata") != null)
-                        {
-                            var propType = payload.GetType().GetProperty("Metadata").PropertyType;
-                            var metaJson = JsonConvert.SerializeObject(payload.GetType().GetProperty("Metadata").GetValue(x.Payload), propType, _serializerSettings);
-                            meta = Encoding.UTF8.GetBytes(metaJson);
-                        }
-                        return new EventData(eventId, x.GetType().FullName, true, data, meta);
-                    });
-
-                    var connection = await GetConnection();
-                    await connection.AppendToStreamAsync(stream, expectedVersion < 0 ? ExpectedVersion.NoStream : expectedVersion, events);
-                }
+                var propType = payload.GetType().GetProperty("Metadata").PropertyType;
+                var metaJson =
+                    JsonConvert.SerializeObject(
+                        payload.GetType().GetProperty("Metadata").GetValue(x.Payload), propType,
+                        _serializerSettings);
+                meta = Encoding.UTF8.GetBytes(metaJson);
             }
-            catch (Exception e)
+            return new EventData(eventId, x.GetType().FullName, true, data, meta);
+        }
+
+        private Exception TryUnwrapException(Exception e)
+        {
+            var aggregateException = e as AggregateException;
+            if (aggregateException != null)
             {
-                _log.Error(e, "Error writing messages to store");
-                throw;
+                aggregateException = aggregateException.Flatten();
+                if (aggregateException.InnerExceptions.Count == 1)
+                    return aggregateException.InnerExceptions[0];
             }
+            return e;
         }
 
         /// <summary>
@@ -170,9 +211,8 @@ namespace EventStore.Persistence
         /// </summary>
         /// <param name="persistenceId"></param>
         /// <param name="toSequenceNr"></param>
-        /// <param name="isPermanent"></param>
         /// <returns></returns>
-        protected override Task DeleteMessagesToAsync(string persistenceId, long toSequenceNr, bool isPermanent)
+        protected override Task DeleteMessagesToAsync(string persistenceId, long toSequenceNr)
         {
             return Task.FromResult<object>(null);
         }
@@ -188,11 +228,16 @@ namespace EventStore.Persistence
 
             public override void WriteJson(JsonWriter writer, object value, JsonSerializer serializer)
             {
-                writer.WriteValue(((IActorRef)value).Path.ToStringWithAddress());
+                var formattedValue = ((IActorRef) value).Path.ToStringWithAddress();
+
+                writer.WriteValue(formattedValue);
             }
 
             public override object ReadJson(JsonReader reader, Type objectType, object existingValue, JsonSerializer serializer)
             {
+                if (reader.Value == null)
+                    return null;
+
                 var value = reader.Value.ToString();
 
                 ActorSelection selection = _context.ActorSelection(value);

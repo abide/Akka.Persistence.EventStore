@@ -1,17 +1,15 @@
 ﻿using System;
 using System.Linq;
-using System.Net;
 using System.Text;
 using System.Threading.Tasks;
 using Akka.Event;
 using Akka.Persistence;
+using Akka.Persistence.EventStore;
 using Akka.Persistence.Serialization;
 using Akka.Persistence.Snapshot;
 using Akka.Serialization;
 using EventStore.ClientAPI;
-using EventStore.ClientAPI.SystemData;
 using Newtonsoft.Json;
-using Akka.Persistence.EventStore;
 
 namespace EventStore.Persistence
 {
@@ -98,16 +96,16 @@ namespace EventStore.Persistence
             await connection.AppendToStreamAsync(streamName, ExpectedVersion.Any, eventData);
         }
 
-        protected override void Saved(SnapshotMetadata metadata)
-        {}
+        protected override Task DeleteAsync(SnapshotMetadata metadata)
+        {
+            return Task.FromResult<object>(null);
+        }
 
-        protected override void Delete(SnapshotMetadata metadata)
-        {}
+        protected override Task DeleteAsync(string persistenceId, SnapshotSelectionCriteria criteria)
+        {
+            return Task.FromResult<object>(null);
+        }
 
-        protected override void Delete(string persistenceId, SnapshotSelectionCriteria criteria)
-        {}
-
-        
         public class StreamMetadata
         {
             [JsonProperty("$maxCount")]

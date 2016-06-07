@@ -1,20 +1,9 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-using Akka.Actor;
-using Akka.TestKit;
-using Akka.Persistence;
-using Akka.Persistence.Journal;
-using Xunit;
+﻿using Akka.Configuration;
 using Akka.Persistence.TestKit.Journal;
-using Akka.Configuration;
-
 
 namespace Akka.Persistence.EventStore.Tests
 {
-    public partial class EventStoreJournalSpec : JournalSpec
+    public class EventStoreJournalSpec : JournalSpec
     {
         private static readonly Config SpecConfig = ConfigurationFactory.ParseString(@"
             akka {
@@ -24,7 +13,7 @@ namespace Akka.Persistence.EventStore.Tests
 
                 persistence {
 
-                publish-plugin-commands = off
+                publish-plugin-commands = on
                 journal {
                     plugin = ""akka.persistence.journal.event-store""
                     event-store {
@@ -41,10 +30,12 @@ namespace Akka.Persistence.EventStore.Tests
             }
         }
         ");
+
         public EventStoreJournalSpec()
             : base(SpecConfig, "EventStoreJournalSpec") 
         {
             Initialize();
+
         }
 
         protected override void Dispose(bool disposing)
