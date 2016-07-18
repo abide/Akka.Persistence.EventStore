@@ -1,48 +1,51 @@
 ﻿using Akka.Configuration;
 using Akka.Persistence.TestKit.Journal;
+using EventStore.ClientAPI.Embedded;
+using EventStore.Core;
+using System.Net;
 
 namespace Akka.Persistence.EventStore.Tests
 {
     public class EventStoreJournalSpec : JournalSpec
     {
         private static readonly Config SpecConfig = ConfigurationFactory.ParseString(@"
-            akka {
-                stdout-loglevel = DEBUG
-	            loglevel = DEBUG
-                loggers = [""Akka.Logger.NLog.NLogLogger,Akka.Logger.NLog""]
-
-                persistence {
-
-                publish-plugin-commands = on
-                journal {
-                    plugin = ""akka.persistence.journal.event-store""
-                    event-store {
-                        class = ""EventStore.Persistence.EventStoreJournal, Akka.Persistence.EventStore""
-                        plugin-dispatcher = ""akka.actor.default-dispatcher""
-                        
-                        # the event store connection string
-			            connection-string = ""ConnectTo=tcp://admin:changeit@127.0.0.1:1113;""
-
-			            # name of the connection
-			            connection-name = ""akka.net""
-                    }
+        akka.test.single-expect-default = 1000000
+        akka.persistence {
+            publish-plugin-commands = on
+            journal {
+                plugin = ""akka.persistence.journal.eventstore""
+                eventstore {
+                    class = ""Akka.Persistence.EventStore.EventStoreJournal, Akka.Persistence.EventStore""
+                    plugin-dispatcher = ""akka.actor.default-dispatcher""
+                    host=""127.0.0.1""
+                    tcp-port = ""4567""
+                    connection-factory = ""Akka.Persistence.EventStore.DefaultConnectionFactory, Akka.Persistence.EventStore""
                 }
             }
-        }
-        ");
+        }");
+
+        private static ClusterVNode Node;
 
         public EventStoreJournalSpec()
-            : base(SpecConfig, "EventStoreJournalSpec") 
+            : base(SpecConfig, "EventStoreJournalSpec")
         {
+            Node = EmbeddedVNodeBuilder
+                .AsSingleNode()
+                .RunInMemory()
+                .WithInternalTcpOn(new IPEndPoint(IPAddress.Parse("127.0.0.1"), 4566))
+                .WithExternalTcpOn(new IPEndPoint(IPAddress.Parse("127.0.0.1"), 4567))
+                .WithInternalHttpOn(new IPEndPoint(IPAddress.Parse("127.0.0.1"), 5566))
+                .WithExternalHttpOn(new IPEndPoint(IPAddress.Parse("127.0.0.1"), 5567))
+                .Build();
+            Node.Start();
             Initialize();
-
         }
 
         protected override void Dispose(bool disposing)
         {
             base.Dispose(disposing);
-            //cleanup
-            StorageCleanup.Clean();
+            Node.Stop();
         }
     }
+
 }

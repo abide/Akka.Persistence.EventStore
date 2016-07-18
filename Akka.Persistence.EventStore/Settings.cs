@@ -1,42 +1,56 @@
 ﻿using Akka.Configuration;
 using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Net;
-using System.Text;
 using System.Threading.Tasks;
+using Akka.Event;
+using EventStore.ClientAPI;
 
 namespace Akka.Persistence.EventStore
 {
-    /// <summary>
-    /// Configuration settings representation targeting Azure TableStorage journal actor.
-    /// </summary>
-    public class JournalSettings 
+    public class JournalSettings
     {
-        public string ConnectionName {get; private set;}
-        public string ConnectionString {get; private set;}
+        public const string ConfigPath = "akka.persistence.journal.eventstore";
 
-        public JournalSettings(Config config)
+        private readonly Task<IEventStoreConnection> _init;
+
+        public JournalSettings(ILoggingAdapter log, Config config)
         {
-            if (config == null) throw new ArgumentNullException("config", "EventStore journal settings cannot be initialized, because required HOCON section couldn't be found");
-            ConnectionName = config.GetString("connection-name");
-            ConnectionString = config.GetString("connection-string");
+            if (config == null) throw new ArgumentNullException(nameof(config), "EventStore journal settings cannot be initialized, because required HOCON section couldn't been found");
+
+            var host = config.GetString("host");
+            var tcpPort = config.GetInt("tcp-port");
+
+            var settingsFactoryType = Type.GetType(config.GetString("connection-factory"));
+            var factory = settingsFactoryType != null
+                ? (IConnectionFactory)Activator.CreateInstance(settingsFactoryType)
+                : new DefaultConnectionFactory();
+
+            _init = factory.CreateAsync(log, host, tcpPort);
         }
+
+        public IEventStoreConnection Connection => _init.Result;
     }
 
-    /// <summary>
-    /// Configuration settings representation targeting Azure Table Storage snapshot store actor.
-    /// </summary>
     public class SnapshotStoreSettings
     {
-        public string ConnectionName { get; private set; }
-        public string ConnectionString { get; private set; }
+        public const string ConfigPath = "akka.persistence.snapshot-store.eventstore";
 
-        public SnapshotStoreSettings(Config config)
+        private readonly Task<IEventStoreConnection> _init;
+
+        public SnapshotStoreSettings(ILoggingAdapter log, Config config)
         {
-            if (config == null) throw new ArgumentNullException("config", "EventStore journal settings cannot be initialized, because required HOCON section couldn't be found");
-            ConnectionName = config.GetString("connection-name");
-            ConnectionString = config.GetString("connection-string");
+            if (config == null) throw new ArgumentNullException(nameof(config), "EventStore snapshot settings cannot be initialized, because required HOCON section couldn't been found");
+
+            var host = config.GetString("host");
+            var tcpPort = config.GetInt("tcp-port");
+
+            var settingsFactoryType = Type.GetType(config.GetString("connection-factory"));
+            var factory = settingsFactoryType != null
+                ? (IConnectionFactory)Activator.CreateInstance(settingsFactoryType)
+                : new DefaultConnectionFactory();
+
+            _init = factory.CreateAsync(log, host, tcpPort);
         }
+
+        public IEventStoreConnection Connection => _init.Result;
     }
 }
